@@ -19,22 +19,27 @@ import "./Helpers.sol";
 
 contract EntryPoint is IEntryPoint, StakeManager {
 
+    // op库
     using UserOperationLib for UserOperation;
 
     SenderCreator private immutable senderCreator = new SenderCreator();
 
     // internal value used during simulation: need to query aggregator.
+    // 模拟过程中使用的内部值：需要查询聚合器。
     address private constant SIMULATE_FIND_AGGREGATOR = address(1);
 
     // marker for inner call revert on out of gas
+    // 内部调用标记在气体耗尽时恢复
     bytes32 private constant INNER_OUT_OF_GAS = hex'deaddead';
 
+    // revert原因最大长度
     uint256 private constant REVERT_REASON_MAX_LEN = 2048;
 
     /**
      * for simulation purposes, validateUserOp (and validatePaymasterUserOp) must return this value
      * in case of signature failure, instead of revert.
      */
+    // 出于模拟目的，如果签名失败，validateUserOp（和 validatePaymasterUserOp）必须返回此值，而不是revert。
     uint256 public constant SIG_VALIDATION_FAILED = 1;
 
     /**
@@ -42,8 +47,10 @@ contract EntryPoint is IEntryPoint, StakeManager {
      * @param beneficiary the address to receive the fees
      * @param amount amount to transfer.
      */
+    // 用所有 UserOperations 收取的费用补偿调用者的受益人地址。
     function _compensate(address payable beneficiary, uint256 amount) internal {
         require(beneficiary != address(0), "AA90 invalid beneficiary");
+        // 将amount转给beneficiary
         (bool success,) = beneficiary.call{value : amount}("");
         require(success, "AA91 failed send to beneficiary");
     }
@@ -55,16 +62,28 @@ contract EntryPoint is IEntryPoint, StakeManager {
      * @param opInfo the opInfo filled by validatePrepayment for this userOp.
      * @return collected the total amount this userOp paid.
      */
+    // 执行用户op
+    // opIndex opInfo 数组的索引
+    // userOp 要执行的 userOp
+    // opInfo 由此 userOp 的 validatePrepayment 填充的 opInfo。
+    // collected 此 userOp 支付的总金额。
     function _executeUserOp(uint256 opIndex, UserOperation calldata userOp, UserOpInfo memory opInfo) private returns (uint256 collected) {
+        // 执行前gas
         uint256 preGas = gasleft();
+        // 获取上下文
         bytes memory context = getMemoryBytesFromOffset(opInfo.contextOffset);
 
+        // 外部调用内部处理op，参数为用户的callData，op信息，上下文
         try this.innerHandleOp(userOp.callData, opInfo, context) returns (uint256 _actualGasCost) {
+            // 返回实际消耗
             collected = _actualGasCost;
         } catch {
+            // 定义内部失败code
             bytes32 innerRevertCode;
             assembly {
+                // 从returndata的0位置开始，复制32bytes个字节到内存位置0
                 returndatacopy(0, 0, 32)
+                // 取内存0位置数据
                 innerRevertCode := mload(0)
             }
             // handleOps was called with gas limit too low. abort entire bundle.
@@ -74,7 +93,9 @@ contract EntryPoint is IEntryPoint, StakeManager {
                 revert FailedOp(opIndex, "AA95 out of gas");
             }
 
+            // 实际消耗gas = _executeUserOp消耗gas + 验证消耗gas
             uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
+            // 退还未使用gas
             collected = _handlePostOp(opIndex, IPaymaster.PostOpMode.postOpReverted, opInfo, context, actualGas);
         }
     }
@@ -87,26 +108,34 @@ contract EntryPoint is IEntryPoint, StakeManager {
      * @param ops the operations to execute
      * @param beneficiary the address to receive the fees
      */
+    // 批量处理用户op，没有使用签名聚合器，如果要使用签名聚合器，调用handleAggregatedOps()
     function handleOps(UserOperation[] calldata ops, address payable beneficiary) public {
 
+        // 获取op长度
         uint256 opslen = ops.length;
+        // 建立op信息数组
         UserOpInfo[] memory opInfos = new UserOpInfo[](opslen);
 
-    unchecked {
-        for (uint256 i = 0; i < opslen; i++) {
-            UserOpInfo memory opInfo = opInfos[i];
-            (uint256 validationData, uint256 pmValidationData) = _validatePrepayment(i, ops[i], opInfo);
-            _validateAccountAndPaymasterValidationData(i, validationData, pmValidationData, address(0));
-        }
+        unchecked {
+            // 验证循环
+            for (uint256 i = 0; i < opslen; i++) {
+                UserOpInfo memory opInfo = opInfos[i];
+                // 验证预支付账户
+                (uint256 validationData, uint256 pmValidationData) = _validatePrepayment(i, ops[i], opInfo);
+                _validateAccountAndPaymasterValidationData(i, validationData, pmValidationData, address(0));
+            }
 
-        uint256 collected = 0;
+            uint256 collected = 0;
 
-        for (uint256 i = 0; i < opslen; i++) {
-            collected += _executeUserOp(i, ops[i], opInfos[i]);
-        }
+            // 执行循环
+            for (uint256 i = 0; i < opslen; i++) {
+                // 返回执行op需要消耗的gas
+                collected += _executeUserOp(i, ops[i], opInfos[i]);
+            }
 
-        _compensate(beneficiary, collected);
-    } //unchecked
+            // 用所有 UserOperations 收取的费用补偿调用者的受益人地址。
+            _compensate(beneficiary, collected);
+        } //unchecked
     }
 
     /**
@@ -176,6 +205,7 @@ contract EntryPoint is IEntryPoint, StakeManager {
     }
 
     /// @inheritdoc IEntryPoint
+    // 模拟执行处理op
     function simulateHandleOp(UserOperation calldata op, address target, bytes calldata targetCallData) external override {
 
         UserOpInfo memory opInfo;
@@ -220,26 +250,38 @@ contract EntryPoint is IEntryPoint, StakeManager {
      * inner function to handle a UserOperation.
      * Must be declared "external" to open a call context, but it can only be called by handleOps.
      */
+    // 内部函数处理op，必须被定义为external，但是值运行当前合约的handleOps调用，模拟内部调用
     function innerHandleOp(bytes memory callData, UserOpInfo memory opInfo, bytes calldata context) external returns (uint256 actualGasCost) {
+        // 当前gas
         uint256 preGas = gasleft();
+        // 必须为当前合约调用
         require(msg.sender == address(this), "AA92 internal call only");
+        // 获取内存中的用户操作
         MemoryUserOp memory mUserOp = opInfo.mUserOp;
 
+        // 获取调用gasLimit
         uint callGasLimit = mUserOp.callGasLimit;
-    unchecked {
-        // handleOps was called with gas limit too low. abort entire bundle.
-        if (gasleft() < callGasLimit + mUserOp.verificationGasLimit + 5000) {
-            assembly {
-                mstore(0, INNER_OUT_OF_GAS)
-                revert(0, 32)
+        unchecked {
+            // handleOps was called with gas limit too low. abort entire bundle.
+            // 调用 handleOps 时气体限制太低。中止整个包。
+            if (gasleft() < callGasLimit + mUserOp.verificationGasLimit + 5000) {
+                assembly {
+                    // 内存位置0存储INNER_OUT_OF_GAS
+                    mstore(0, INNER_OUT_OF_GAS)
+                    // 返回内存0位置
+                    revert(0, 32)
+                }
             }
         }
-    }
 
+        // 初始化操作成功
         IPaymaster.PostOpMode mode = IPaymaster.PostOpMode.opSucceeded;
+        // calldata数据不为空
         if (callData.length > 0) {
+            // 实际调用
             bool success = Exec.call(mUserOp.sender, 0, callData, callGasLimit);
             if (!success) {
+                // 返回数据
                 bytes memory result = Exec.getReturnData(REVERT_REASON_MAX_LEN);
                 if (result.length > 0) {
                     emit UserOperationRevertReason(opInfo.userOpHash, mUserOp.sender, mUserOp.nonce, result);
@@ -366,6 +408,7 @@ contract EntryPoint is IEntryPoint, StakeManager {
     * Called only during simulation.
     * This function always reverts to prevent warm/cold storage differentiation in simulation vs execution.
     */
+    // 验证接收地址及支付地址，仅在预估时调用
     function _validateSenderAndPaymaster(bytes calldata initCode, address sender, bytes calldata paymasterAndData) external view {
         if (initCode.length == 0 && sender.code.length == 0) {
             // it would revert anyway. but give a meaningful message
@@ -387,6 +430,9 @@ contract EntryPoint is IEntryPoint, StakeManager {
      * revert (with FailedOp) in case validateUserOp reverts, or account didn't send required prefund.
      * decrement account's deposit if needed
      */
+    // 验证账户预支付
+    // 调用 account.validateUserOp。还原（使用 FailedOp）以防 validateUserOp 还原，或帐户未发送所需的预付款。
+    // 如果需要，减少帐户的存款
     function _validateAccountPrepayment(uint256 opIndex, UserOperation calldata op, UserOpInfo memory opInfo, uint256 requiredPrefund)
     internal returns (uint256 gasUsedByValidateAccountPrepayment, uint256 validationData) {
     unchecked {
@@ -457,6 +503,7 @@ contract EntryPoint is IEntryPoint, StakeManager {
     /**
      * revert if either account validationData or paymaster validationData is expired
      */
+    // 验证账户和支付账户验证数据
     function _validateAccountAndPaymasterValidationData(uint256 opIndex, uint256 validationData, uint256 paymasterValidationData, address expectedAggregator) internal view {
         (address aggregator, bool outOfTimeRange) = _getValidationData(validationData);
         if (expectedAggregator != aggregator) {
@@ -477,6 +524,7 @@ contract EntryPoint is IEntryPoint, StakeManager {
         }
     }
 
+    // 获取验证数据
     function _getValidationData(uint256 validationData) internal view returns (address aggregator, bool outOfTimeRange) {
         if (validationData == 0) {
             return (address(0), false);
@@ -494,22 +542,32 @@ contract EntryPoint is IEntryPoint, StakeManager {
      * @param opIndex the index of this userOp into the "opInfos" array
      * @param userOp the userOp to validate
      */
-    function _validatePrepayment(uint256 opIndex, UserOperation calldata userOp, UserOpInfo memory outOpInfo)
-    private returns (uint256 validationData, uint256 paymasterValidationData) {
-
+    // 验证帐户和出纳员（如果已定义）。
+    // 还要确保总验证gas不超过 verificationGasLimit
+    // 此方法链下调用时，由 simulateValidation() 触发， 链上调用时，由 handleOps 触发
+    // 返回验证数据
+    function _validatePrepayment(uint256 opIndex, UserOperation calldata userOp, UserOpInfo memory outOpInfo) private returns (uint256 validationData, uint256 paymasterValidationData) {
+        // 当前gas
         uint256 preGas = gasleft();
+        // 用户op信息
         MemoryUserOp memory mUserOp = outOpInfo.mUserOp;
+        // 拷贝用户op信息到内存
         _copyUserOpToMemory(userOp, mUserOp);
+        // 计算userOp哈希
         outOpInfo.userOpHash = getUserOpHash(userOp);
 
         // validate all numeric values in userOp are well below 128 bit, so they can safely be added
         // and multiplied without causing overflow
+        // 验证 userOp 中的所有数值都远低于 128 位，因此可以安全地相加和相乘而不会导致溢出
         uint256 maxGasValues = mUserOp.preVerificationGas | mUserOp.verificationGasLimit | mUserOp.callGasLimit |
         userOp.maxFeePerGas | userOp.maxPriorityFeePerGas;
+        // 超过gas上限，则revert
         require(maxGasValues <= type(uint120).max, "AA94 gas values overflow");
 
+        // 初始化gasUsedByValidateAccountPrepayment
         uint256 gasUsedByValidateAccountPrepayment;
         (uint256 requiredPreFund) = _getRequiredPrefund(mUserOp);
+        // 验证账户预支付账户的gas消耗，验证数据
         (gasUsedByValidateAccountPrepayment, validationData) = _validateAccountPrepayment(opIndex, userOp, outOpInfo, requiredPreFund);
         //a "marker" where account opcode validation is done and paymaster opcode validation is about to start
         // (used only by off-chain simulateValidation)
@@ -519,16 +577,16 @@ contract EntryPoint is IEntryPoint, StakeManager {
         if (mUserOp.paymaster != address(0)) {
             (context, paymasterValidationData) = _validatePaymasterPrepayment(opIndex, userOp, outOpInfo, requiredPreFund, gasUsedByValidateAccountPrepayment);
         }
-    unchecked {
-        uint256 gasUsed = preGas - gasleft();
+        unchecked {
+            uint256 gasUsed = preGas - gasleft();
 
-        if (userOp.verificationGasLimit < gasUsed) {
-            revert FailedOp(opIndex, "AA40 over verificationGasLimit");
+            if (userOp.verificationGasLimit < gasUsed) {
+                revert FailedOp(opIndex, "AA40 over verificationGasLimit");
+            }
+            outOpInfo.prefund = requiredPreFund;
+            outOpInfo.contextOffset = getOffsetOfMemoryBytes(context);
+            outOpInfo.preOpGas = preGas - gasleft() + userOp.preVerificationGas;
         }
-        outOpInfo.prefund = requiredPreFund;
-        outOpInfo.contextOffset = getOffsetOfMemoryBytes(context);
-        outOpInfo.preOpGas = preGas - gasleft() + userOp.preVerificationGas;
-    }
     }
 
     /**
@@ -542,50 +600,66 @@ contract EntryPoint is IEntryPoint, StakeManager {
      * @param context the context returned in validatePaymasterUserOp
      * @param actualGas the gas used so far by this user operation
      */
+    // 退还未使用的gasFee，返回实际消耗的gas费
+    // 在执行 callData 之后立即调用。
+    // 如果定义了 paymaster 并且其验证返回非空上下文，则调用其 postOp 。超出的金额将退还到帐户（或 paymaster - 如果在请求中使用过）
+    // @param opIndex 批次中的索引
+    // @param mode - 是从 innerHandleOp 调用还是从外部调用 (postOpReverted)
+    // @param opInfo userOp 字段和验证期间收集的信息
+    // @param context validatePaymasterUserOp 返回的上下文
+    // @param actualGas 此用户操作到目前为止使用的气体
     function _handlePostOp(uint256 opIndex, IPaymaster.PostOpMode mode, UserOpInfo memory opInfo, bytes memory context, uint256 actualGas) private returns (uint256 actualGasCost) {
         uint256 preGas = gasleft();
-    unchecked {
-        address refundAddress;
-        MemoryUserOp memory mUserOp = opInfo.mUserOp;
-        uint256 gasPrice = getUserOpGasPrice(mUserOp);
+        unchecked {
+            // 退款地址
+            address refundAddress;
+            // 用户操作信息
+            MemoryUserOp memory mUserOp = opInfo.mUserOp;
+            // 获取用户gasPrice
+            uint256 gasPrice = getUserOpGasPrice(mUserOp);
 
-        address paymaster = mUserOp.paymaster;
-        if (paymaster == address(0)) {
-            refundAddress = mUserOp.sender;
-        } else {
-            refundAddress = paymaster;
-            if (context.length > 0) {
-                actualGasCost = actualGas * gasPrice;
-                if (mode != IPaymaster.PostOpMode.postOpReverted) {
-                    IPaymaster(paymaster).postOp{gas : mUserOp.verificationGasLimit}(mode, context, actualGasCost);
-                } else {
-                    // solhint-disable-next-line no-empty-blocks
-                    try IPaymaster(paymaster).postOp{gas : mUserOp.verificationGasLimit}(mode, context, actualGasCost) {}
-                    catch Error(string memory reason) {
-                        revert FailedOp(opIndex, string.concat("AA50 postOp reverted: ", reason));
-                    }
-                    catch {
-                        revert FailedOp(opIndex, "AA50 postOp revert");
+            // 预支付账户
+            address paymaster = mUserOp.paymaster;
+            if (paymaster == address(0)) {
+                // 退款地址为当前调用者
+                refundAddress = mUserOp.sender;
+            } else {
+                // 退款地址为预支付地址
+                refundAddress = paymaster;
+                if (context.length > 0) {
+                    // 实际消耗gas费 = 实际消耗gas数量 * gas价格
+                    actualGasCost = actualGas * gasPrice;
+                    if (mode != IPaymaster.PostOpMode.postOpReverted) {
+                        IPaymaster(paymaster).postOp{gas : mUserOp.verificationGasLimit}(mode, context, actualGasCost);
+                    } else {
+                        // solhint-disable-next-line no-empty-blocks
+                        try IPaymaster(paymaster).postOp{gas : mUserOp.verificationGasLimit}(mode, context, actualGasCost) {}
+                        catch Error(string memory reason) {
+                            revert FailedOp(opIndex, string.concat("AA50 postOp reverted: ", reason));
+                        }
+                        catch {
+                            revert FailedOp(opIndex, "AA50 postOp revert");
+                        }
                     }
                 }
             }
-        }
-        actualGas += preGas - gasleft();
-        actualGasCost = actualGas * gasPrice;
-        if (opInfo.prefund < actualGasCost) {
-            revert FailedOp(opIndex, "AA51 prefund below actualGasCost");
-        }
-        uint256 refund = opInfo.prefund - actualGasCost;
-        _incrementDeposit(refundAddress, refund);
-        bool success = mode == IPaymaster.PostOpMode.opSucceeded;
-        emit UserOperationEvent(opInfo.userOpHash, mUserOp.sender, mUserOp.paymaster, mUserOp.nonce, success, actualGasCost, actualGas);
-    } // unchecked
+            actualGas += preGas - gasleft();
+            actualGasCost = actualGas * gasPrice;
+            if (opInfo.prefund < actualGasCost) {
+                revert FailedOp(opIndex, "AA51 prefund below actualGasCost");
+            }
+            uint256 refund = opInfo.prefund - actualGasCost;
+            _incrementDeposit(refundAddress, refund);
+            bool success = mode == IPaymaster.PostOpMode.opSucceeded;
+            emit UserOperationEvent(opInfo.userOpHash, mUserOp.sender, mUserOp.paymaster, mUserOp.nonce, success, actualGasCost, actualGas);
+        } // unchecked
     }
 
     /**
      * the gas price this UserOp agrees to pay.
      * relayer/block builder might submit the TX with higher priorityFee, but the user should not
      */
+    // 获取用户op同意支付的gasPrice
     function getUserOpGasPrice(MemoryUserOp memory mUserOp) internal view returns (uint256) {
     unchecked {
         uint256 maxFeePerGas = mUserOp.maxFeePerGas;
@@ -602,10 +676,12 @@ contract EntryPoint is IEntryPoint, StakeManager {
         return a < b ? a : b;
     }
 
+    // 获取bytes的偏移量
     function getOffsetOfMemoryBytes(bytes memory data) internal pure returns (uint256 offset) {
         assembly {offset := data}
     }
 
+    // 从指定偏移量获取数据
     function getMemoryBytesFromOffset(uint256 offset) internal pure returns (bytes memory data) {
         assembly {data := offset}
     }
@@ -613,7 +689,11 @@ contract EntryPoint is IEntryPoint, StakeManager {
     //place the NUMBER opcode in the code.
     // this is used as a marker during simulation, as this OP is completely banned from the simulated code of the
     // account and paymaster.
+    // 将 NUMBER 操作码放在代码中。
+    // 这在模拟期间用作标记，因为此 OP 完全禁止在模拟代码中使用
+    // 帐户和付款人。
     function numberMarker() internal view {
+        // 在内存0位置存储当前区块号
         assembly {mstore(0, number())}
     }
 }

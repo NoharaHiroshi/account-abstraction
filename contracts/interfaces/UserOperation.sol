@@ -5,17 +5,17 @@ pragma solidity ^0.8.12;
 
     /**
      * User Operation struct
-     * @param sender the sender account of this request.
-     * @param nonce unique value the sender uses to verify it is not a replay.
-     * @param initCode if set, the account contract will be created by this constructor/
-     * @param callData the method call to execute on this account.
-     * @param callGasLimit the gas limit passed to the callData method call.
-     * @param verificationGasLimit gas used for validateUserOp and validatePaymasterUserOp.
-     * @param preVerificationGas gas not calculated by the handleOps method, but added to the gas paid. Covers batch overhead.
-     * @param maxFeePerGas same as EIP-1559 gas parameter.
-     * @param maxPriorityFeePerGas same as EIP-1559 gas parameter.
-     * @param paymasterAndData if set, this field holds the paymaster address and paymaster-specific data. the paymaster will pay for the transaction instead of the sender.
-     * @param signature sender-verified signature over the entire request, the EntryPoint address and the chain ID.
+     * @param sender 此请求的发件人帐户。
+     * @param nonce 发送者用来验证它不是重播的唯一值。
+     * @param initCode 如果设置，账户合约将由此构造函数创建
+     * @param callData 要在此帐户上执行的方法调用。
+     * @param callGasLimit 传递给 callData 方法调用的气体限制。
+     * @param verificationGasLimit 用于 validateUserOp 和 validatePaymasterUserOp的gas上限。
+     * @param preVerificationGas gas 不是通过 handleOps 方法计算的，而是添加到支付的 gas 中。涵盖批量开销。
+     * @param maxFeePerGas 与 EIP-1559 gas 参数相同。
+     * @param maxPriorityFeePerGas 与 EIP-1559 gas 参数相同。
+     * @param paymasterAndData 如果设置，此字段包含出纳员地址和出纳员特定数据。出纳员将代替发件人支付交易费用。
+     * @param signature 对整个请求、EntryPoint 地址和链 ID 的发件人验证签名。
      */
     struct UserOperation {
 

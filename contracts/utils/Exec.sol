@@ -15,6 +15,7 @@ library Exec {
         uint256 txGas
     ) internal returns (bool success) {
         assembly {
+            // 提供txGas，value，执行to地址的，calldata为mem[32: 32+data.size]
             success := call(txGas, to, value, add(data, 0x20), mload(data), 0, 0)
         }
     }
@@ -40,16 +41,24 @@ library Exec {
     }
 
     // get returned data from last call or calldelegate
+    // 返回数据
     function getReturnData(uint256 maxLen) internal pure returns (bytes memory returnData) {
         assembly {
+            // 获取返回数据大小
             let len := returndatasize()
+            // 如果len > maxLen; len = maxLen
             if gt(len, maxLen) {
                 len := maxLen
             }
+            // 空闲内存指针
             let ptr := mload(0x40)
+            // 存储分配的内存大小
             mstore(0x40, add(ptr, add(len, 0x20)))
+            // 内存存储一字节数据，数据为len
             mstore(ptr, len)
+            // 从0开始，复制len长度的字节到内存位置1
             returndatacopy(add(ptr, 0x20), 0, len)
+            // 返回数据指针
             returnData := ptr
         }
     }
